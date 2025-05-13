@@ -1,7 +1,6 @@
-use std::io;
+// This file contains the Rust code for managing audio sessions and volumes on Windows using the Windows API.
 use std::ffi::OsString; // For handling OS-specific strings
 use std::os::windows::ffi::OsStringExt; // Extension traits for Windows-specific string conversions
-use std::path::Path; // For handling file paths
 use windows::{
     core::{Interface, PWSTR}, // Core Windows interface types
     Win32::{Foundation::{CloseHandle, HANDLE}, Media::Audio::{
@@ -9,14 +8,7 @@ use windows::{
     }, System::{Com::{
         CoCreateInstance, CoTaskMemFree, CoInitializeEx, CoUninitialize, CLSCTX_ALL, COINIT_APARTMENTTHREADED // COM threading model (apartment threaded)
     }, Diagnostics::ToolHelp::{
-        CreateToolhelp32Snapshot, Module32First, Module32Next, Process32FirstW, Process32NextW, MODULEENTRY32W, PROCESSENTRY32W, TH32CS_SNAPMODULE, TH32CS_SNAPPROCESS           // Gets next process in a snapshot
-    }, ProcessStatus::{
-        K32EnumProcessModules,    // Enumerates modules in a process
-        K32GetModuleBaseNameW,    // Gets base name of a module
-    }, Threading::{
-        OpenProcess,              // Opens a handle to a process
-        PROCESS_QUERY_INFORMATION, // Process access right for querying info
-        PROCESS_VM_READ,          // Process access right for reading memory
+        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS           // Gets next process in a snapshot
     }}},
 };
 use tauri::command;

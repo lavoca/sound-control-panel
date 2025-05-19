@@ -4,7 +4,7 @@ use std::os::windows::ffi::OsStringExt; // Extension traits for Windows-specific
 use windows::{
     core::{Interface, PWSTR}, // Core Windows interface types
     Win32::{Foundation::{CloseHandle, HANDLE}, Media::Audio::{
-        eConsole, eRender, Endpoints::IAudioEndpointVolume, IAudioSessionControl, IAudioSessionControl2, IAudioSessionEnumerator, IAudioSessionManager2, IMMDeviceEnumerator, ISimpleAudioVolume, MMDeviceEnumerator       // Interface for controlling audio volume
+        IAudioSessionNotification ,eConsole, eRender, Endpoints::IAudioEndpointVolume, IAudioSessionControl, IAudioSessionControl2, IAudioSessionEnumerator, IAudioSessionManager2, IMMDeviceEnumerator, ISimpleAudioVolume, MMDeviceEnumerator       // Interface for controlling audio volume
     }, System::{Com::{
         CoCreateInstance, CoTaskMemFree, CoInitializeEx, CoUninitialize, CLSCTX_ALL, COINIT_APARTMENTTHREADED // COM threading model (apartment threaded)
     }, Diagnostics::ToolHelp::{

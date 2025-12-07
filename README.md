@@ -1,33 +1,33 @@
 # Sound Control Panel
 
-This project is a desktop application built with [Tauri](https://tauri.app/), [Vue 3](https://vuejs.org/), and [TypeScript](https://www.typescriptlang.org/). It allows users to view and control the audio sessions and their volumes on their system.
+A custom, real-time volume mixer for Windows built with Rust, Tauri, and Vue 3. This project was created to explore modern desktop development and interfacing with low-level Windows Core Audio APIs.
 
-## Features
+![Application Screenshot](screenshots/volume_control_ui.png)
 
-- View all active audio sessions with their process names and unique identifiers.
-- Adjust the volume of individual audio sessions in real-time.
-- Built with a modern stack: Tauri for the backend, Vue 3 for the frontend, and Rust for system-level operations.
+---
 
-## Setup Instructions
+### Core Features
 
-1. **Install Dependencies**:
-   - Install [Node.js](https://nodejs.org/) and [Rust](https://www.rust-lang.org/).
-   - Run `npm install` in the project directory to install the required Node.js dependencies.
+*   **Live Session Discovery:** Automatically detects and displays applications as they start or stop playing audio.
+*   **Real-Time UI:** The session list and volume levels update instantly in response to system events.
+*   **Per-App Volume Control:** Provides individual volume sliders and mute controls for each audio session.
+*   **Lightweight & Performant:** Built with Rust for a minimal resource footprint.
 
-2. **Development**:
-   - Run `npm run dev` to start the development server and Tauri application.
+### Key Technical Achievements
 
-3. **Build**:
-   - Run `npm run build` to build the frontend.
-   - Run `npm run tauri build` to package the application.
+This project demonstrates a practical application of several key technologies and concepts:
 
-## Recommended IDE Setup
+*   **Backend:** Interfaced with Windows Core Audio COM APIs (`IAudioSessionNotification`, `IAudioSessionEvents`) using the **Rust** `windows-rs` crate.
+*   **Architecture:** Implemented a persistent background service on a dedicated thread to monitor system events, decoupled from the UI.
+*   **Framework:** Used **Tauri** to build a cross-platform-ready desktop application with a web-based frontend.
+*   **Frontend:** Created a responsive and reactive UI with **Vue 3** (Composition API) and **TypeScript**, driven by events pushed from the Rust backend.
 
-- [VS Code](https://code.visualstudio.com/) with:
-  - [Volar](https://marketplace.visualstudio.com/items?itemName=Vue.volar) for Vue 3 support.
-  - [Tauri](https://marketplace.visualstudio.com/items?itemName=tauri-apps.tauri-vscode) for Tauri integration.
-  - [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer) for Rust development.
+### Tech Stack
 
-## License
+*   **Backend:** Rust | Tauri
+*   **Frontend:** Vue 3 | TypeScript
+*   **Styling:** Tailwind CSS
 
-This project is licensed under the MIT License.
+---
+
+This project is licensed under the **MIT License**.

@@ -175,59 +175,133 @@ onUnmounted(() => {
 
 
 <template>
-  <!-- Main container with padding and spacing for list items -->
-  <div class="p-4 space-y-4">
+  <!-- Main container with a dark background, padding, and spacing for list items -->
+  <div class="bg-gray-900 text-gray-200 min-h-screen p-4 font-sans">
+    <h1 class="text-2xl font-bold text-center mb-6 text-white">Audio Sessions</h1>
     
-    <!-- A helpful message if the list is empty -->
-    <div v-if="sessionData.length === 0" class="text-center text-gray-400">
-      No active audio sessions found. Play some audio to see it here.
+    <!-- A helpful message if the list is empty, styled for the dark theme -->
+    <div v-if="sessionData.length === 0" class="text-center text-gray-500 py-10">
+      <p>No active audio sessions found.</p>
+      <p class="text-sm">Play some audio to see it here.</p>
     </div>
 
-    <!-- The v-for loop to render each session -->
-    <!-- We use `session.uid` as the key because it's guaranteed to be unique -->
-    <div
-      v-for="session in sessionData"
-      :key="session.uid"
-      class="flex items-center justify-between p-3 bg-gray-700 rounded-lg shadow-md transition-opacity duration-300"
-      :class="{ 'opacity-50': !session.is_active }"
-    >
-      <!-- Session Info (Name and PID) -->
-      <div class="flex flex-col">
-        <!-- Make sure the property names here EXACTLY match your TypeScript `SessionData` type -->
-        <span class="font-bold text-white">{{ session.name }}</span>
-        <span class="text-xs text-gray-400">PID: {{ session.pid }}</span>
-      </div>
+    <!-- The list container -->
+    <div class="space-y-3">
+      <!-- The v-for loop to render each session -->
+      <div
+        v-for="session in sessionData"
+        :key="session.uid"
+        class="
+          flex items-center justify-between p-4
+          bg-gray-800/50 backdrop-blur-sm border border-gray-700/50 
+          rounded-xl shadow-lg transition-all duration-300 hover:bg-gray-700/60
+        "
+        :class="{ 'opacity-60': !session.is_active }"
+      >
+        <!-- Session Info (Name and PID) -->
+        <div class="flex flex-col">
+          <span class="font-semibold text-white text-lg">{{ session.name }}</span>
+          <span class="text-xs text-gray-400">PID: {{ session.pid }}</span>
+        </div>
 
-      <!-- Volume Controls -->
-      <div class="flex items-center space-x-4">
-        <!-- Volume Slider -->
-        <input
-          type="range"
-          min="0"
-          max="1"
-          step="0.01"
-          :value="session.volume"
-          @input="ChangeVolume(session.pid, session.uid, ($event.target as HTMLInputElement).valueAsNumber)"
-          class="w-40 h-2 bg-gray-500 rounded-lg appearance-none cursor-pointer"
-        />
-        
-        <!-- Volume Percentage -->
-        <span class="w-12 text-sm text-center text-gray-300">{{ (session.volume * 100).toFixed(0) }}%</span>
+        <!-- Volume Controls -->
+        <div class="flex items-center space-x-4">
+          <!-- Volume Slider -->
+          <!-- Custom classes are needed for styling the slider's track and thumb -->
+          <input
+            type="range"
+            min="0"
+            max="1"
+            step="0.01"
+            :value="session.volume"
+            @input="ChangeVolume(session.pid, session.uid, ($event.target as HTMLInputElement).valueAsNumber)"
+            class="volume-slider w-48"
+          />
+          
+          <!-- Volume Percentage -->
+          <span class="w-12 text-sm text-center text-gray-400 font-mono">{{ (session.volume * 100).toFixed(0) }}%</span>
 
-        <!-- Mute Button -->
-        <button
-          @click="ToggleMute(session.pid, session.uid, !session.is_muted)"
-          class="px-4 py-1 text-sm font-semibold text-white rounded-md transition-colors duration-200"
-          :class="session.is_muted ? 'bg-red-600 hover:bg-red-700' : 'bg-blue-600 hover:bg-blue-700'"
-        >
-          {{ session.is_muted ? 'Unmute' : 'Mute' }}
-        </button>
+          <!-- Mute Button -->
+          <button
+            @click="ToggleMute(session.pid, session.uid, !session.is_muted)"
+            class="
+              w-20 px-4 py-2 text-sm font-semibold text-white rounded-full 
+              transition-all duration-200 ease-in-out
+              focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-900
+            "
+            :class="session.is_muted 
+              ? 'bg-red-600 hover:bg-red-700 focus:ring-red-500' 
+              : 'bg-gray-600 hover:bg-gray-500 focus:ring-blue-500'"
+          >
+            {{ session.is_muted ? 'Unmute' : 'Mute' }}
+          </button>
+        </div>
       </div>
     </div>
   </div>
 </template>
 
+<style>
 
+/* We define some CSS variables that match our Tailwind color scheme for consistency */
+:root {
+  --slider-track-bg: #4a5568; /* gray-600 */
+  --slider-thumb-bg: #e2e8f0; /* gray-200 */
+  --slider-thumb-border: #4299e1; /* blue-400 */
+}
+
+.volume-slider {
+  /* Resetting the default browser styles is crucial */
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent; /* The track background is handled by pseudo-elements */
+  cursor: pointer;
+}
+
+/* --- Track Styling --- */
+.volume-slider::-webkit-slider-runnable-track {
+  background-color: var(--slider-track-bg);
+  height: 0.35rem;
+  border-radius: 0.5rem;
+}
+.volume-slider::-moz-range-track {
+  background-color: var(--slider-track-bg);
+  height: 0.35rem;
+  border-radius: 0.5rem;
+}
+
+/* --- Thumb (the draggable circle) Styling --- */
+.volume-slider::-webkit-slider-thumb {
+  -webkit-appearance: none; /* Override default look */
+  appearance: none;
+  margin-top: -6px; /* Center the thumb on the track */
+  
+  background-color: var(--slider-thumb-bg);
+  height: 1.25rem; /* 20px */
+  width: 1.25rem; /* 20px */
+  border-radius: 9999px; /* Make it a perfect circle */
+  border: 3px solid var(--slider-thumb-border);
+  transition: background-color 0.2s ease-in-out;
+}
+.volume-slider::-moz-range-thumb {
+  background-color: var(--slider-thumb-bg);
+  height: 1.25rem;
+  width: 1.25rem;
+  border-radius: 9999px;
+  border: 3px solid var(--slider-thumb-border);
+  transition: background-color 0.2s ease-in-out;
+}
+
+/* Add a hover effect for the thumb */
+.volume-slider:hover::-webkit-slider-thumb {
+  background-color: #ffffff;
+}
+.volume-slider:hover::-moz-range-thumb {
+  background-color: #ffffff;
+}
+
+
+</style>
 
 
 

@@ -2,7 +2,7 @@
 
 A custom, real-time volume mixer for Windows built with Rust, Tauri, and Vue 3. This project was created to explore modern desktop development and interfacing with low-level Windows Core Audio APIs.
 
-![Application Screenshot](screenshots/volume_control_ui.png)
+![Application Screenshot](public/screenshots/volume_control_ui.png)
 
 ---
 

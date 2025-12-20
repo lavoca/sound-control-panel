@@ -21,8 +21,14 @@ use windows::{
      },},}
 };
 
-
-
+use tauri::Manager;
+use tokio::net::{TcpListener, TcpStream}; // Provides the TCP listener for incoming connections.
+use futures_util::stream::StreamExt; // Extension trait for working with streams (like incoming messages).
+use futures_util::sink::SinkExt; // Extension trait for sending messages (sinking data).
+use std::net::SocketAddr; // Standard type for storing IP addresses and ports.
+use tokio_tungstenite::{WebSocketStream, accept_async, tungstenite::Error}; // Core type definitions for the async WebSocket stream handler.
+use tokio_tungstenite::tungstenite::Message; // Type used to represent a WebSocket frame (Text, Binary, Ping, Close, etc.).
+use tokio::time::{sleep, Duration};
 
 fn get_process_name_by_id(process_id: u32) -> Result<Option<String>> {
 
@@ -264,9 +270,10 @@ struct GlobalAudioSessionNotifier  {
     monitor_loop_sender: Sender<MonitorThreadMessage>,
 }
 #[allow(non_snake_case)]
-impl IAudioSessionNotification_Impl for GlobalAudioSessionNotifier_Impl  {
+impl IAudioSessionNotification_Impl for GlobalAudioSessionNotifier_Impl  { 
     // --- THIS IS THE KEY METHOD called by Windows when a NEW session is created ---
-    fn OnSessionCreated(&self, new_session_control: Ref<'_, IAudioSessionControl>) -> Result<()> {
+    // This callback runs on a Windows thread. Send the new session to the main loop for processing.
+    fn OnSessionCreated(&self, new_session_control: Ref<'_, IAudioSessionControl>) -> Result<()> { 
         // here for whatever reason new_session_control goes from type Ref<'_, IAudioSessionControl> to Option<IAudioSessionControl> hence why we handle Some()
         if let Some(owned_session_control)  = new_session_control.clone() {
             if self.monitor_loop_sender.send(MonitorThreadMessage::SessionCreated(owned_session_control)).is_err(){
@@ -350,6 +357,7 @@ fn get_session_details(session_control: &IAudioSessionControl) -> Result<Session
 
 }
 
+// loop that runs ina thread and catchs new opened or removed process audio instances
 pub fn monitor_thread_loop(app_handle: AppHandle, shutdown_signal: Arc<AtomicBool>)  {
 
     unsafe { 
@@ -359,6 +367,8 @@ pub fn monitor_thread_loop(app_handle: AppHandle, shutdown_signal: Arc<AtomicBoo
         }
     }
 
+    // To safely communicate between the Windows callback threads and our main monitor loop thread,
+    // we use an MPSC channel. The sender is for the callbacks, the receiver is for the loop.
     let (monitor_loop_sender, monitor_loop_receiver) = mpsc::channel::<MonitorThreadMessage>();
 
 
@@ -423,6 +433,10 @@ pub fn monitor_thread_loop(app_handle: AppHandle, shutdown_signal: Arc<AtomicBoo
                 }
             }
     };
+
+    // We register COM listeners that Windows will call when audio session events happen.
+    // The main loop below processes the results from these listeners.
+    // (The COM callbacks are executed on separate, Windows-managed threads.)
 
     // create an instance of the struct and convert it to a com object using .into()
     let global_notifier: IAudioSessionNotification = GlobalAudioSessionNotifier { monitor_loop_sender: monitor_loop_sender.clone() }.into();
@@ -493,11 +507,17 @@ pub fn monitor_thread_loop(app_handle: AppHandle, shutdown_signal: Arc<AtomicBoo
     };
 
   
-
+    // The main loop receives and processes event data sent by the COM callbacks.
         // this loop is responsible for doing the same things we did to the already existing sessions in the previous code to new created sessions.
     loop {
 
-        if shutdown_signal.load(AtomicOrdering::Relaxed) {break;}
+
+        // For shutdown, we use a shared AtomicBool (`shutdown_signal`), not the MPSC channel.
+        // The main Tauri thread sets it to true, and this loop checks it to know when to exit.
+        if shutdown_signal.load(AtomicOrdering::Relaxed) {
+            break;
+
+        }
 
         match monitor_loop_receiver.try_recv() {
             Ok(MonitorThreadMessage::SessionCreated(session_control)) => {
@@ -549,4 +569,90 @@ pub fn monitor_thread_loop(app_handle: AppHandle, shutdown_signal: Arc<AtomicBoo
     }
     unsafe { CoUninitialize(); }
 
+}
+
+
+
+// start a websocket server that connects and listens for audio info from the browser extension
+// we pass it app_handle to use it to send audio updates from the extension to the application UI
+pub async fn websocket_server(app_handle: AppHandle, shutdown_signal: Arc<AtomicBool> ) {
+    let port = "127.0.0.1:8080";
+    // open a channel in this port to listen to
+    let listener = match TcpListener::bind(port).await {
+        Ok(listener) => listener,
+        Err(e) => {
+            // Log to terminal
+            eprintln!("Fatal Server Error: {}", e);
+            let error_msg = format!("Port is already in use: {}", port);
+            // Tell the Vue UI so the user knows why it's not working
+            app_handle.emit("server-error", error_msg).unwrap_or_else(|e| {
+                        eprintln!("Error: {:?}", e);
+                    });
+            return; // Exit the function gracefully instead of panicking
+        }
+    }; 
+    // main loop that keeps the server alive and listening to connections 
+    loop {
+        // tokio::select! concurrently awaits multiple "async cases" and runs the code for the first one that completes.
+        tokio::select! { // select! has await built in it so the cases inside the loop execute only after a promise
+            // case 1: the listener establishes a connection, this returns Result<> so we handle both the return value and the error
+            response = listener.accept() => { 
+                match response {
+                    Ok((stream, addr)) => {
+                        let handle = app_handle.clone(); // we need to clone the handle becasue handle_conection task thread can be spawned every loop  
+                        tokio::spawn(handle_connection(handle, stream, addr)); // Spawn a new, separate async task to handle this specific connection. 
+                                                  //This allows the main server loop to immediately go back to listening for more connections without being blocked by the new one
+                    }
+                    Err(e) => { eprintln!("Error: {}", e); }
+                } 
+                
+            }
+            // case 2: check if we have a shutdown every 100 milliseconds to avoid 100% CPU usage. if the shutdown is true the server closes
+            _ = sleep(Duration::from_millis(100)) => { 
+                if shutdown_signal.load(AtomicOrdering::Relaxed) {
+                break;
+                }
+            }
+        } 
+    } 
+}
+
+
+// handle the stream channel to receive and send data  
+async fn handle_connection(app_handle: AppHandle, stream: TcpStream, addr: SocketAddr) {
+    // establish conection to the stream, this will be the channel where audio data will flow 
+    if let Ok(ws_stream) =  accept_async(stream).await {
+        // split the stream channel into two parts: a writer (for sending) and a reader (for receiving)
+        let (mut write, mut read) = ws_stream.split();
+
+        while let Some(message) = read.next().await {
+            match message {
+                Ok(msg) => {
+                    if msg.is_text() || msg.is_binary() {
+                        println!("recived message:{:?}", msg);
+                        if let Ok(payload) = msg.to_text() {
+                            app_handle.emit("server-message", payload).unwrap_or_else(|e| {
+                                eprintln!("Error: {:?}", e);
+                            });
+                        }
+                        let send_back = String::from("echoing back from tauri").into();
+                        if let Err(e) = write.send(send_back).await { // if this is not err then send() will execute 
+                            eprintln!("[WebSocket] Error sending message back to {}: {:?}", addr, e);
+                            break;
+                        }
+                    }                 
+                }
+                Err(e) => {
+                    // An error occurred while reading from the stream.
+                    eprintln!("[WebSocket] Error reading from stream for {}: {:?}", addr, e);
+                    break; // Stop the loop on a read error.
+                }
+            }
+        }
+
+    } else {
+        // Handle the error case
+        eprintln!("failed to establish connection to {}", addr);
+    };
+    
 }

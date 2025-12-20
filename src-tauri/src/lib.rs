@@ -10,6 +10,7 @@ mod commands;
 mod audio_monitor;
 
 
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -17,7 +18,8 @@ pub fn run() {
             // 1. Get an AppHandle. This is a controller for the app that is safe to
             //    send to other threads. We'll pass this to our monitor thread so it
             //    can send events to the frontend.
-            let app_handle = app.handle().clone();
+            let monitor_app_handle = app.handle().clone(); // for the monitor_thread_loop
+            let websocket_app_handle = app.handle().clone(); // for the websocket_server
 
             // 2. Create the shared shutdown signal.
             //    This is an Arc<AtomicBool> that both the main app and the monitor thread
@@ -28,8 +30,11 @@ pub fn run() {
             //    This allows us to retrieve it later in the `on_window_event` handler
             //    when the user tries to close the window.
             // The `manage` method makes `Arc<AtomicBool>` available throughout the app.
-            app.manage(shutdown_flag.clone());
+            app.manage(shutdown_flag.clone());// here we are creating a new Arc pointer that points to the exact same AtomicBool on the heap, we are not cloning atomicbool itself
+            // any part of the application that has access to an AppHandle or a Window object can now retrieve this shared state
 
+
+            let monitor_thread_signal = shutdown_flag.clone(); // clone the shutdown arc to give it to the monitor thread
             // 4. Spawn the dedicated background thread for audio monitoring.
             //    `std::thread::spawn` starts a new OS thread.
             //    The `move` keyword gives the closure ownership of the variables it uses
@@ -37,9 +42,14 @@ pub fn run() {
             std::thread::spawn(move || {
                 // The new thread will execute this function from our audio_monitor module.
                 // the params are app_handle for communicating with the frontend and shutdown_flag for graceful termination.
-                audio_monitor::monitor_thread_loop(app_handle, shutdown_flag);
+                audio_monitor::monitor_thread_loop(monitor_app_handle, monitor_thread_signal);
             });
             // --- End of the Audio Monitor Setup ---
+
+            // spawn a tokio non blocking task to handle the websocket server that listens to audio updates from the browser extension
+            // No need for a clone pf the shutdown_flag if this is the last use of `shutdown_flag` in `setup`
+            tauri::async_runtime::spawn(audio_monitor::websocket_server(websocket_app_handle, shutdown_flag));
+
             // The setup hook must return Ok(()) to indicate success.
             Ok(())
         })

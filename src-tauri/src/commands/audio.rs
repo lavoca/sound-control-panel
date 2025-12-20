@@ -156,7 +156,7 @@ fn pwstr_to_string(pwstr: PWSTR) -> String {
     }
 }
 
-
+// gets already runing audio audio sessions (different from audio monitor loop function which only gets new or removed audio sessions)
 #[command]
 pub async fn get_sessions_and_volumes() -> Result<Vec<SessionDetails>, String> {
 

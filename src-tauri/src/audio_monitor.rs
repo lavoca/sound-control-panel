@@ -594,13 +594,14 @@ pub async fn websocket_server(app_handle: AppHandle, shutdown_signal: Arc<Atomic
     // main loop that keeps the server alive and listening to connections 
     loop {
         // tokio::select! concurrently awaits multiple "async cases" and runs the code for the first one that completes.
-        tokio::select! { // select! has await built in it so the cases inside the loop execute only after a promise
+        tokio::select! { // select! has await built in so the cases inside the loop execute only after a promise
             // case 1: the listener establishes a connection, this returns Result<> so we handle both the return value and the error
             response = listener.accept() => { 
                 match response {
                     Ok((stream, addr)) => {
-                        let handle = app_handle.clone(); // we need to clone the handle becasue handle_conection task thread can be spawned every loop  
-                        tokio::spawn(handle_connection(handle, stream, addr)); // Spawn a new, separate async task to handle this specific connection. 
+                        let handle = app_handle.clone(); // we need to clone the handle becasue handle_connection task thread can be spawned every loop so we need a handle for every loop 
+                        let shutdown = shutdown_signal.clone(); // clone the shutdown so every task detects it and sends a close frame to its client to also shutdown garcefuly 
+                        tokio::spawn(handle_connection(handle, stream, addr, shutdown)); // Spawn a new, separate async task to handle this specific connection. 
                                                   //This allows the main server loop to immediately go back to listening for more connections without being blocked by the new one
                     }
                     Err(e) => { eprintln!("Error: {}", e); }
@@ -608,47 +609,89 @@ pub async fn websocket_server(app_handle: AppHandle, shutdown_signal: Arc<Atomic
                 
             }
             // case 2: check if we have a shutdown every 100 milliseconds to avoid 100% CPU usage. if the shutdown is true the server closes
-            _ = sleep(Duration::from_millis(100)) => { 
-                if shutdown_signal.load(AtomicOrdering::Relaxed) {
-                break;
+            _ = async {
+                loop {
+                    if shutdown_signal.load(AtomicOrdering::Relaxed) {
+                        break; // break this inner loop
+                    }
+                    sleep(Duration::from_millis(100)).await;
                 }
+            } => {
+                println!("[WebSocket] Shutdown signal received. Exiting server loop.");
+                break; // break the main loop
             }
+            
         } 
     } 
 }
 
 
 // handle the stream channel to receive and send data  
-async fn handle_connection(app_handle: AppHandle, stream: TcpStream, addr: SocketAddr) {
-    // establish conection to the stream, this will be the channel where audio data will flow 
+async fn handle_connection(app_handle: AppHandle, stream: TcpStream, addr: SocketAddr, shutdown_signal: Arc<AtomicBool>) {
+    // establish connection to the stream, this will be the channel where audio data will flow 
     if let Ok(ws_stream) =  accept_async(stream).await {
         // split the stream channel into two parts: a writer (for sending) and a reader (for receiving)
         let (mut write, mut read) = ws_stream.split();
 
-        while let Some(message) = read.next().await {
-            match message {
-                Ok(msg) => {
-                    if msg.is_text() || msg.is_binary() {
-                        println!("recived message:{:?}", msg);
-                        if let Ok(payload) = msg.to_text() {
-                            app_handle.emit("server-message", payload).unwrap_or_else(|e| {
-                                eprintln!("Error: {:?}", e);
-                            });
+         
+        loop {
+
+            tokio::select! {
+                biased; // polls the cases in order so this will check the shutdown first
+
+
+                _ = async { // select! polls hte future retrurned by the shutdown loop, if its 'true' then it executes the promise which is sending close to the client and break the loop
+
+                    loop {
+                        if shutdown_signal.load(AtomicOrdering::Relaxed) {
+                            break; // break this inner loop
                         }
-                        let send_back = String::from("echoing back from tauri").into();
-                        if let Err(e) = write.send(send_back).await { // if this is not err then send() will execute 
-                            eprintln!("[WebSocket] Error sending message back to {}: {:?}", addr, e);
+                        sleep(Duration::from_millis(100)).await;
+                    }
+                } => {
+                    // send a closing message to the client (extension) to signal it that the server is closing
+                    let _ = write.send(Message::Close(None)).await;
+                    break; // break the main loop
+                }
+
+
+                // this keeps listening to the read stream because it receives update after update so we need to handle one update and awwit the next one with read.next()
+                message = read.next() => {
+                    match message {
+                        Some(Ok(msg)) => {
+                            if msg.is_text() || msg.is_binary() {
+                                println!("recived message:{:?}", msg);
+                                if let Ok(payload) = msg.to_text() {
+                                    app_handle.emit("server-message", payload).unwrap_or_else(|e| {
+                                        eprintln!("Error: {:?}", e);
+                                    });
+                                }
+                                let send_back = Message::Text("echoing back from tauri".into());
+                                if let Err(e) = write.send(send_back).await { // if this is not err then send() will execute 
+                                    eprintln!("[WebSocket] Error sending message back to {}: {:?}", addr, e);
+                                    break;
+                                }
+                            }else if msg.is_close() {
+                                // a close message was sent from the client
+                                println!("[WebSocket] Received close frame from {}. Closing connection.", addr);
+                                break;
+                            }              
+                        }
+                        Some(Err(e)) => {
+                            // An error occurred while reading from the stream.
+                            eprintln!("[WebSocket] Error reading from stream for {}: {:?}", addr, e);
+                            break; // Stop the loop on a read error.
+                        }
+                        None => {
                             break;
                         }
-                    }                 
-                }
-                Err(e) => {
-                    // An error occurred while reading from the stream.
-                    eprintln!("[WebSocket] Error reading from stream for {}: {:?}", addr, e);
-                    break; // Stop the loop on a read error.
-                }
+                    }
+                }  
+                
             }
-        }
+        }  
+        // After the loop, try to properly close the sink
+        let _ = write.close().await;
 
     } else {
         // Handle the error case

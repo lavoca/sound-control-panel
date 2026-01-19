@@ -29,6 +29,8 @@ use std::net::SocketAddr; // Standard type for storing IP addresses and ports.
 use tokio_tungstenite::{WebSocketStream, accept_async, tungstenite::Error}; // Core type definitions for the async WebSocket stream handler.
 use tokio_tungstenite::tungstenite::Message; // Type used to represent a WebSocket frame (Text, Binary, Ping, Close, etc.).
 use tokio::time::{sleep, Duration};
+use tokio::sync::{broadcast};
+use crate::ExtensionData; // enum defined in lib.rs to wrap data received by websocket_server function via an mpsc channel from a command function
 
 fn get_process_name_by_id(process_id: u32) -> Result<Option<String>> {
 
@@ -118,12 +120,36 @@ fn get_process_name_by_id(process_id: u32) -> Result<Option<String>> {
     }
 }
 
+#[derive(Debug, serde::Deserialize, serde::Serialize, Clone)] // getting data outside the tauri app means we need to Deserialize that data to work with it inside here
+// struct to hold tab info sent from the browser extension and send it to the frontend 
+#[serde(rename_all = "camelCase")] // to match the typscript interface naming convention
+pub struct AudioTab { // this struct should mirror the exact structure of the object from the extension
+
+    tab_id: u32,
+    tab_url: String,
+    tab_title: String,
+    is_audible: bool,
+    has_content_audio: bool,
+    is_muted: bool,
+    paused: bool,
+    volume: f64,
+    last_update: u64,
+}
 
 
+// This enum represents all possible messages received from the browser extension.
+#[derive(Debug, serde::Deserialize, serde::Serialize, Clone)]
+#[serde(tag = "type", content = "payload")] // Use the "type" field to decide the variant, and "payload" for its data.
+// message from extension can be {type: "AUDIO" or "PING", payload: [list of tabs] or "ping"}
+pub enum BrowserMessage {
+    // A variant for the audio tabs message.
+    #[serde(rename = "AUDIO_TABS")] // Maps to the JSON `type` value "AUDIO_TABS" from the extension.
+    AudioTabs(Vec<AudioTab>), // serde maps "AUDIO_TABS" to camelcase version 'AudioTabs'
 
-
-
-
+    // A variant for the ping message.
+    #[serde(rename = "PING")] // Maps to the JSON `type` value "PING" from the extension.
+    Ping(String),
+}
 
 
 #[derive(Debug, serde::Serialize, Clone)] // For serializing session details to JSON
@@ -575,8 +601,16 @@ pub fn monitor_thread_loop(app_handle: AppHandle, shutdown_signal: Arc<AtomicBoo
 
 // start a websocket server that connects and listens for audio info from the browser extension
 // we pass it app_handle to use it to send audio updates from the extension to the application UI
-pub async fn websocket_server(app_handle: AppHandle, shutdown_signal: Arc<AtomicBool> ) {
+// also pass it a tokio Receiver to receive data from command functions
+pub async fn websocket_server(app_handle: AppHandle, shutdown_signal: Arc<AtomicBool>, mut command_receiver: tokio::sync::mpsc::Receiver<ExtensionData> ) {
     let port = "127.0.0.1:8080";
+
+    // Create a broadcast channel to distribute commands to all connected clients.
+    // this is a one producer many consumers channel
+    // the sender is command_receiver from command functions that cant be cloned since its mpsc, when it receives it sends to broadcast channel
+    // the solution is to subscribe to the receiver and everytime it gets new data it broadcasts it to all the receivers subscribed
+    let (command_broadcaster, _) = broadcast::channel::<ExtensionData>(16); 
+
     // open a channel in this port to listen to
     let listener = match TcpListener::bind(port).await {
         Ok(listener) => listener,
@@ -601,13 +635,21 @@ pub async fn websocket_server(app_handle: AppHandle, shutdown_signal: Arc<Atomic
                     Ok((stream, addr)) => {
                         let handle = app_handle.clone(); // we need to clone the handle becasue handle_connection task thread can be spawned every loop so we need a handle for every loop 
                         let shutdown = shutdown_signal.clone(); // clone the shutdown so every task detects it and sends a close frame to its client to also shutdown garcefuly 
-                        tokio::spawn(handle_connection(handle, stream, addr, shutdown)); // Spawn a new, separate async task to handle this specific connection. 
+                        let broadcast_receiver = command_broadcaster.subscribe(); // receives data from the "broadcast sender that itself receives data from command functions"
+                        tokio::spawn(handle_connection(handle, stream, addr, shutdown, broadcast_receiver)); // Spawn a new, separate async task to handle this specific connection. 
                                                   //This allows the main server loop to immediately go back to listening for more connections without being blocked by the new one
                     }
                     Err(e) => { eprintln!("Error: {}", e); }
                 } 
                 
             }
+            
+            // when we receive data from command sender in a command function
+            Some(command) = command_receiver.recv() => {
+                // send it via the broadcast channel to the receivers in every handle_connection spawned task
+                let _ = command_broadcaster.send(command);
+            }
+
             // case 2: check if we have a shutdown every 100 milliseconds to avoid 100% CPU usage. if the shutdown is true the server closes
             _ = async {
                 loop {
@@ -627,7 +669,8 @@ pub async fn websocket_server(app_handle: AppHandle, shutdown_signal: Arc<Atomic
 
 
 // handle the stream channel to receive and send data  
-async fn handle_connection(app_handle: AppHandle, stream: TcpStream, addr: SocketAddr, shutdown_signal: Arc<AtomicBool>) {
+async fn handle_connection(app_handle: AppHandle, stream: TcpStream, addr: SocketAddr, shutdown_signal: Arc<AtomicBool>, mut command_broadcast_receiver: tokio::sync::broadcast::Receiver<ExtensionData>) {
+    
     // establish connection to the stream, this will be the channel where audio data will flow 
     if let Ok(ws_stream) =  accept_async(stream).await {
         // split the stream channel into two parts: a writer (for sending) and a reader (for receiving)
@@ -655,22 +698,49 @@ async fn handle_connection(app_handle: AppHandle, stream: TcpStream, addr: Socke
                 }
 
 
-                // this keeps listening to the read stream because it receives update after update so we need to handle one update and awwit the next one with read.next()
+                // this keeps listening to the read stream because it receives update after update so we need to handle one update and await the next one with read.next()
                 message = read.next() => {
                     match message {
                         Some(Ok(msg)) => {
-                            if msg.is_text() || msg.is_binary() {
-                                println!("recived message:{:?}", msg);
+                            if msg.is_text() {
+                                
                                 if let Ok(payload) = msg.to_text() {
-                                    app_handle.emit("server-message", payload).unwrap_or_else(|e| {
-                                        eprintln!("Error: {:?}", e);
-                                    });
+                                    match serde_json::from_str::<BrowserMessage>(payload) { // converts from JSON to rust enum 'BrowserMessage'
+                                        // after conversion we check what variant was in the JSON
+                                        // if 'type' from extension was "AUDIO_TABS" then AudioTabs variant will match, if it was "PING" then Ping variant will match 
+                                        // the 'type' from extension check is done by #[serde(tag = "type", ...)] macro above where we created the enum 'BrowserMessage'
+                                        Ok(browser_message) => {
+                                            match browser_message { 
+                                                BrowserMessage::AudioTabs(tabs_payload) => {
+                                                    // payload here is a "vec<AudioTab>"
+                                                    app_handle.emit("extension-audio-tabs", tabs_payload).unwrap_or_else(|e| {
+                                                    eprintln!("Error: {:?}", e);
+                                                    });
+                                                }
+                                                
+                                                BrowserMessage::Ping(ping_payload) => {
+                                                    // payload here is a "String"
+                                                    eprintln!("[WebSocket] 'Ping' message received: {:?}", ping_payload);
+                                                }
+                                            }   
+
+                                        }
+                                        Err(e) => {
+                                            // The incoming JSON was malformed or didn't match the BrowserMessage struct
+                                            eprintln!("[WebSocket] Failed to deserialize message: {:?}", e);
+                                            eprintln!("[WebSocket] Original message was: {}", payload);
+                                        }
+                                    }
+                                    
                                 }
-                                let send_back = Message::Text("echoing back from tauri".into());
+                                /* 
+                                let send_back = Message::Text("tauri app recieved audio tabs".into());
                                 if let Err(e) = write.send(send_back).await { // if this is not err then send() will execute 
                                     eprintln!("[WebSocket] Error sending message back to {}: {:?}", addr, e);
                                     break;
                                 }
+                                */
+
                             }else if msg.is_close() {
                                 // a close message was sent from the client
                                 println!("[WebSocket] Received close frame from {}. Closing connection.", addr);
@@ -686,7 +756,24 @@ async fn handle_connection(app_handle: AppHandle, stream: TcpStream, addr: Socke
                             break;
                         }
                     }
-                }  
+                }
+
+                command_result = command_broadcast_receiver.recv() => {
+                    match command_result {
+                        Ok(command) => {
+                            if let Ok(json_command) = serde_json::to_string(&command) {
+                                if write.send(Message::Text(json_command.into())).await.is_err() {
+                                    break;
+                                }
+                            } 
+                        }
+                        Err(e) => {
+                            eprintln!("[WebSocket] Broadcast channel error for client {}: {:?}. Closing connection.", addr, e);
+                            break;
+                        }
+                    }
+                }
+
                 
             }
         }  

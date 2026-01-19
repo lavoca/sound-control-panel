@@ -2,7 +2,10 @@
 import { ref, onMounted, onUnmounted, Ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, Event } from "@tauri-apps/api/event";
+import { throttle } from "lodash-es";
 
+// the current page being shown it will be either processes audio or tabs audio
+const currentView = ref<'processes' | 'tabs'>('processes');
 
 // this will represent the session details from the backend
 type SessionData  = {
@@ -12,6 +15,18 @@ type SessionData  = {
   volume: number,
   is_muted: boolean,
   is_active: boolean,
+}
+// represents a tab's audio from the browser extension
+type AudioTab = {
+  tabId: number;
+  url: string;
+  title: string;
+  isAudible: boolean;
+  hasContentAudio: boolean;
+  is_muted: boolean;
+  paused: boolean;
+  volume: number;
+  lastUpdate: number;
 }
 
 
@@ -29,7 +44,9 @@ type SessionStatePayload = {
 
 
 // this will hold the session data that will be converted from rust type to vue type in order to use it in the template in a vue/typescript freindly way
-const sessionData: Ref<SessionData[]> = ref([]) // sessionData is a reactive variable so to annotate it we need Ref<T>, T is the type we want.
+const sessionData: Ref<SessionData[]> = ref([]); // sessionData is a reactive variable so to annotate it we need Ref<T>, T is the type we want.
+// holds audio tabs from the extension to use in the ui
+const audioTabsData: Ref<AudioTab[]> = ref([]);
 
 
 // This is the setup for the cleanup logic. We declare variables that will
@@ -40,37 +57,38 @@ let unlistenGetData: (() => void) | null = null;
 let unlistenVolumeChanged: (() => void) | null = null;
 let unlistenClosed: (() => void) | null = null;
 let unlistenStateChanged: (() => void) | null = null;
-let unlistenCriticalError: (() => void) | null = null;
+let unlistenAudioTabs: (() => void) | null = null;
 
 
-// this function to scan for already running audio sessions and is called when onMounted cycle.
+// this function to scan for already running audio sessions and is called in onMounted cycle.
 async function GetInitialData() {
-  const initialSessions = await invoke<SessionData[]>("get_sessions_and_volumes");
+  // invokes the #[command] functions in the backend
+  const initialSessions = await invoke<SessionData[]>("get_sessions_and_volumes"); // the invoke type should match the command function return type
   sessionData.value = initialSessions;
 }
 
-// this function runs on Mounted to get initial session data to populate the ui
-// the back end loops over existing sessions and sends one session data for every itteration
-// so this function that listens to the backend event gets called for every detected session 
-function GetSessionData(event: Event<SessionData>) {
 
+
+// this function runs on Mounted to get initial session data to populate the ui
+// the backend loops over existing sessions and sends one session data for every itteration
+// so this function that listens to the backend event gets called for every detected session 
+function GetSessionData(event: Event<SessionData>) { // the event is just one SessionData object that we will push into an array of the same type
+  // listens to app_handle.emit() events and we register this function to listen to the events in onMounted hook
   console.log("RECEIVED EVENT: 'audio-session-created'", event);
   // we check if a session is already in the session list brfore pushing the session's data into it
   const sessionIndex = sessionData.value.findIndex(s => s.pid === event.payload.pid && s.uid === event.payload.uid);
   if (sessionIndex === -1) { // if we dont find the session (-1 means false)
     sessionData.value.push(event.payload) // push methode signals vue to rerender the ui
   }else {
-    sessionData.value = sessionData.value.map(session => {
-      return session.uid === event.payload.uid ? event.payload : session;
-    })
+    sessionData.value[sessionIndex] = event.payload; // replace the old value with the new one 
   }
-  
 };
+
 
 
 // this function invokes the back end and changes a specific session's volume but doesnt get back the confirmation that the volume changed to the frontend 
 // instead we optimisticaly change the volume in the ui to before the backend so it feels responsive and instaniouss 
-// the front end instead will know about the change and confirm it through the CheckVolumeChanged function that gets an event from the backend when it detects the change
+// the front end instead will know about the change and confirm it through the 'CheckVolumeChanged' function that gets an event from the backend when it detects the change
 function ChangeVolume(pid: number, uid: string, setTargetVolume: number) { // prameters's values from template
   const payload = { 
     pid: pid,
@@ -88,7 +106,7 @@ function ChangeVolume(pid: number, uid: string, setTargetVolume: number) { // pr
     }
   })
   // set volume in backend
-  invoke<number>("set_volume", payload)
+  invoke<void>("set_volume", payload);
   
 }
 
@@ -110,7 +128,7 @@ function ToggleMute(pid: number, uid: string, isMute: boolean) {
     }
   });
   
-  invoke<boolean>("set_mute", payload)
+  invoke<void>("set_mute", payload);
 
 }
 
@@ -150,14 +168,44 @@ function SessionState(event: Event<SessionStatePayload>) {
 }
 
 
+// listens to backend websocket server for audio tabs from the extension
+function GetExtensionAudioTabs(event: Event<AudioTab[]>) { // the event is an array of AudioTab objects
+  console.log("RECEIVED EVENT: 'audio-session-created'", event);
+  audioTabsData.value = event.payload; // replace the whole array from event with the array 'audioTabsData' evry time we get updates
+
+} // we could make the backend send just one 'AudioTab' object at a time and populate the array 'audioTabsData' with them but just for demonstration that sending a list/array can also work
+
+
+
+// this function sends tab volumes to a 'tauri command function' with 'invoke' 
+// the command function wraps the received volume value ands sends it through a tokio 'mpsc channel' to the websocket server in audio_monnitor  
+// the websocket server receives the volume and sends it back to the Extension so it can apply the new volume 
+function _ChangeTabVolume(tabId: number, volume: number) {
+  const payload = {
+    tabId: tabId,
+    volume: volume,
+  };
+  invoke<void>('set_tab_volume', payload);
+}
+
+const ChangeTabVolume = throttle(_ChangeTabVolume, 50, {leading: true, trailing: true});
+
+function ToggleTabMute(tabId: number, is_muted: boolean) {
+  const payload = {
+    tabId: tabId,
+    mute: is_muted,
+  };
+  invoke<void>('set_tab_mute', payload);
+}
 
 onMounted(async () => {
 
-  await GetInitialData();
+  await GetInitialData(); // this one is an invoke function it does not listen so we dont need to free a listener
   unlistenGetData = await listen<SessionData>("audio-session-created", GetSessionData);
   unlistenVolumeChanged = await listen<VolumeChangedPayload>("audio-session-volume-changed", CheckVolumeChanged);
   unlistenStateChanged = await listen<SessionStatePayload>("session-state-changed", SessionState);
   unlistenClosed = await listen<string>("audio-session-closed", SessionClosed);
+  unlistenAudioTabs = await listen<AudioTab[]>("extension-audio-tabs", GetExtensionAudioTabs);
 
 });
 
@@ -166,6 +214,7 @@ onUnmounted(() => {
   if(unlistenVolumeChanged) unlistenVolumeChanged();
   if(unlistenStateChanged) unlistenStateChanged();
   if(unlistenClosed) unlistenClosed();
+  if(unlistenAudioTabs) unlistenAudioTabs();
 });
 
 
@@ -176,67 +225,161 @@ onUnmounted(() => {
 
 <template>
   <!-- Main container with a dark background, padding, and spacing for list items -->
-  <div class="bg-gray-900 text-gray-200 min-h-screen p-4 font-sans">
-    <h1 class="text-2xl font-bold text-center mb-6 text-white">Audio Sessions</h1>
+  <!-- NEW: Added overflow-hidden to contain the sliding animation -->
+  <div class="bg-gray-900 text-gray-200 min-h-screen p-4 font-sans overflow-hidden">
+    <h1 class="text-2xl font-bold text-center mb-6 text-white">Audio Control</h1>
     
-    <!-- A helpful message if the list is empty, styled for the dark theme -->
-    <div v-if="sessionData.length === 0" class="text-center text-gray-500 py-10">
-      <p>No active audio sessions found.</p>
-      <p class="text-sm">Play some audio to see it here.</p>
+    <!-- NEW: View Toggle Buttons -->
+    <div class="flex justify-center mb-6 bg-gray-800 p-1 rounded-full w-max mx-auto">
+      <button
+        @click="currentView = 'processes'"
+        class="px-6 py-2 text-sm font-semibold rounded-full transition-colors duration-300"
+        :class="currentView === 'processes' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:bg-gray-700'"
+      >
+        Processes
+      </button>
+      <button
+        @click="currentView = 'tabs'"
+        class="px-6 py-2 text-sm font-semibold rounded-full transition-colors duration-300"
+        :class="currentView === 'tabs' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:bg-gray-700'"
+      >
+        Browser Tabs
+      </button>
     </div>
 
-    <!-- The list container -->
-    <div class="space-y-3">
-      <!-- The v-for loop to render each session -->
-      <div
-        v-for="session in sessionData"
-        :key="session.uid"
-        class="
-          flex items-center justify-between p-4
-          bg-gray-800/50 backdrop-blur-sm border border-gray-700/50 
-          rounded-xl shadow-lg transition-all duration-300 hover:bg-gray-700/60
-        "
-        :class="{ 'opacity-60': !session.is_active }"
-      >
-        <!-- Session Info (Name and PID) -->
-        <div class="flex flex-col">
-          <span class="font-semibold text-white text-lg">{{ session.name }}</span>
-          <span class="text-xs text-gray-400">PID: {{ session.pid }}</span>
-        </div>
+    <!-- NEW: Page container to hold both sliding views -->
+    <div class="relative w-full h-auto">
 
-        <!-- Volume Controls -->
-        <div class="flex items-center space-x-4">
-          <!-- Volume Slider -->
-          <!-- Custom classes are needed for styling the slider's track and thumb -->
-          <input
-            type="range"
-            min="0"
-            max="1"
-            step="0.01"
-            :value="session.volume"
-            @input="ChangeVolume(session.pid, session.uid, ($event.target as HTMLInputElement).valueAsNumber)"
-            class="volume-slider w-48"
-          />
-          
-          <!-- Volume Percentage -->
-          <span class="w-12 text-sm text-center text-gray-400 font-mono">{{ (session.volume * 100).toFixed(0) }}%</span>
+      <!-- NEW: Transition wrapper for the Processes View -->
+      <Transition name="slide-fade">
+        <!-- RENDER PROCESSES VIEW -->
+        <!-- NEW: Changed v-if to v-show to work better with transitions -->
+        <div v-show="currentView === 'processes'" class="w-full">
+          <!-- A helpful message if the list is empty, styled for the dark theme -->
+          <div v-if="sessionData.length === 0" class="text-center text-gray-500 py-10">
+            <p>No active audio sessions found.</p>
+            <p class="text-sm">Play some audio to see it here.</p>
+          </div>
 
-          <!-- Mute Button -->
-          <button
-            @click="ToggleMute(session.pid, session.uid, !session.is_muted)"
-            class="
-              w-20 px-4 py-2 text-sm font-semibold text-white rounded-full 
-              transition-all duration-200 ease-in-out
-              focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-900
-            "
-            :class="session.is_muted 
-              ? 'bg-red-600 hover:bg-red-700 focus:ring-red-500' 
-              : 'bg-gray-600 hover:bg-gray-500 focus:ring-blue-500'"
-          >
-            {{ session.is_muted ? 'Unmute' : 'Mute' }}
-          </button>
+          <!-- The list container -->
+          <div class="space-y-3">
+            <!-- The v-for loop to render each session -->
+            <div
+              v-for="session in sessionData"
+              :key="session.uid"
+              class="
+                flex items-center justify-between p-4
+                bg-gray-800/50 backdrop-blur-sm border border-gray-700/50 
+                rounded-xl shadow-lg transition-all duration-300 hover:bg-gray-700/60
+              "
+              :class="{ 'opacity-60': !session.is_active }"
+            >
+              <!-- Session Info (Name and PID) -->
+              <div class="flex flex-col">
+                <span class="font-semibold text-white text-lg">{{ session.name }}</span>
+                <span class="text-xs text-gray-400">PID: {{ session.pid }}</span>
+              </div>
+
+              <!-- Volume Controls -->
+              <div class="flex items-center space-x-4">
+                <!-- Volume Slider -->
+                <!-- Custom classes are needed for styling the slider's track and thumb -->
+                <input
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.01"
+                  :value="session.volume"
+                  @input="ChangeVolume(session.pid, session.uid, ($event.target as HTMLInputElement).valueAsNumber)"
+                  class="volume-slider w-48"
+                />
+                
+                <!-- Volume Percentage -->
+                <span class="w-12 text-sm text-center text-gray-400 font-mono">{{ (session.volume * 100).toFixed(0) }}%</span>
+
+                <!-- Mute Button -->
+                <button
+                  @click="ToggleMute(session.pid, session.uid, !session.is_muted)"
+                  class="
+                    w-20 px-4 py-2 text-sm font-semibold text-white rounded-full 
+                    transition-all duration-200 ease-in-out
+                    focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-900
+                  "
+                  :class="session.is_muted 
+                    ? 'bg-red-600 hover:bg-red-700 focus:ring-red-500' 
+                    : 'bg-gray-600 hover:bg-gray-500 focus:ring-blue-500'"
+                >
+                  {{ session.is_muted ? 'Unmute' : 'Mute' }}
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
-      </div>
+      </Transition>
+
+      <!-- NEW: Transition wrapper for the Browser Tabs View -->
+      <Transition name="slide-fade">
+        <!-- RENDER BROWSER TABS VIEW -->
+        <!-- NEW: This whole block is new. It's positioned on top of the other view and toggled with v-show -->
+        <div v-show="currentView === 'tabs'" class="w-full absolute top-0 left-0">
+          <!-- A helpful message if the tabs list is empty -->
+          <div v-if="audioTabsData.length === 0" class="text-center text-gray-500 py-10">
+            <p>No browser tabs with audio are currently detected.</p>
+          </div>
+          <!-- The list container for tabs -->
+          <div class="space-y-3">
+            <!-- The v-for loop to render each tab -->
+            <div
+              v-for="tab in audioTabsData"
+              :key="tab.tabId"
+              class="
+                flex items-center justify-between p-4
+                bg-gray-800/50 backdrop-blur-sm border border-gray-700/50 
+                rounded-xl shadow-lg transition-all duration-300 hover:bg-gray-700/60
+              "
+              :class="{ 'opacity-60': !tab.isAudible }"
+            >
+              <!-- Tab Info (Title and URL) -->
+              <div class="flex flex-col w-1/3">
+                <span class="font-semibold text-white text-lg truncate" :title="tab.title">{{ tab.title }}</span>
+                <span class="text-xs text-gray-400 truncate" :title="tab.url">{{ tab.url }}</span>
+              </div>
+
+              <!-- Volume Controls for Tabs -->
+              <div class="flex items-center space-x-4">
+                <!-- Volume Slider for Tabs -->
+                <input
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.01"
+                  :value="tab.volume"
+                  @input="ChangeTabVolume(tab.tabId, ($event.target as HTMLInputElement).valueAsNumber)"
+                  class="volume-slider w-48"
+                />
+                
+                <!-- Volume Percentage for Tabs -->
+                <span class="w-12 text-sm text-center text-gray-400 font-mono">{{ (tab.volume * 100).toFixed(0) }}%</span>
+
+                <!-- Mute Button for Tabs -->
+                <button
+                  @click="ToggleTabMute(tab.tabId, !tab.is_muted)"
+                  class="
+                    w-20 px-4 py-2 text-sm font-semibold text-white rounded-full 
+                    transition-all duration-200 ease-in-out
+                    focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-900
+                  "
+                  :class="tab.is_muted 
+                    ? 'bg-red-600 hover:bg-red-700 focus:ring-red-500' 
+                    : 'bg-gray-600 hover:bg-gray-500 focus:ring-blue-500'"
+                >
+                  {{ tab.is_muted ? 'Unmute' : 'Mute' }}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </Transition>
     </div>
   </div>
 </template>
@@ -300,6 +443,23 @@ onUnmounted(() => {
   background-color: #ffffff;
 }
 
+/* --- NEW: Transition Styles for the Page Slide --- */
+.slide-fade-enter-active {
+  transition: all 0.4s ease-out;
+}
+.slide-fade-leave-active {
+  transition: all 0.4s ease-in;
+  /* Position absolute is needed on the leaving element to prevent layout shifts */
+  position: absolute;
+}
+.slide-fade-enter-from {
+  opacity: 0;
+  transform: translateX(30px);
+}
+.slide-fade-leave-to {
+  opacity: 0;
+  transform: translateX(-30px);
+}
 
 </style>
 

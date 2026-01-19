@@ -1,6 +1,7 @@
 // This file contains the Rust code for managing audio sessions and volumes on Windows using the Windows API.
 use std::ffi::OsString; // For handling OS-specific strings
-use std::os::windows::ffi::OsStringExt; // Extension traits for Windows-specific string conversions
+use std::os::windows::ffi::OsStringExt;
+// Extension traits for Windows-specific string conversions
 use windows::{
     core::{Interface, PWSTR, BOOL}, // Core Windows interface types
     Win32::{Foundation::{CloseHandle, HANDLE}, Media::Audio::{
@@ -13,8 +14,10 @@ use windows::{
         CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS           // Gets next process in a snapshot
     }}},
 };
-use tauri::command;
+use tauri::{command, State}; // state is used to access the manage store
 use crate::audio_monitor::SessionDetails;
+use crate::ExtensionData; // wrapper for data that will be sent via tokio mpsc
+use tokio::sync::mpsc::Sender;
 
 
 
@@ -231,7 +234,14 @@ pub async fn get_sessions_and_volumes() -> Result<Vec<SessionDetails>, String> {
         .flatten())
         .unwrap_or_else(|| "unknown".to_string());
         
-        sessions_data.push(SessionDetails{process_id: process_id, session_uid: uid, process_name: display_name, session_volume: session_current_volume, is_muted: muted.as_bool(), is_active: active});
+        sessions_data.push(SessionDetails{
+            process_id: process_id, 
+            session_uid: uid, 
+            process_name: display_name, 
+            session_volume: session_current_volume, 
+            is_muted: muted.as_bool(), 
+            is_active: active
+        });
 
         //sessions_data.push((process_id, uid, display_name, session_current_volume, muted.as_bool(), active));
     }
@@ -436,4 +446,24 @@ pub async fn set_mute(pid: u32, uid: String, mute: bool) -> Result<(), String> {
     Ok(())
 
 
+}
+
+// invoked from frontend and sneds the tab volume data to the websocket server using a tokio mpsc channel created in 'setup()'
+// injected with 'command_sender' a tokio mpsc sender from the tauri manage store to send that data wrapped in a ExtensionData type
+#[command]
+pub async fn set_tab_volume (tab_id: u32, volume: f64, command_sender: State<'_, Sender<ExtensionData>>) -> Result<(), String> {
+
+    let volume_command = ExtensionData::SetVolume { tab_id, volume };
+
+    command_sender.send(volume_command).await.map_err(|e| e.to_string())?;
+    Ok(()) 
+  
+}
+#[command]
+pub async fn set_tab_mute(tab_id: u32, mute: bool, command_sender: State<'_, Sender<ExtensionData>>) -> Result<(), String> {
+    
+    let mute_command = ExtensionData::SetMute { tab_id, mute };
+
+    command_sender.send(mute_command).await.map_err(|e| e.to_string())?;
+    Ok(())
 }

@@ -14,8 +14,19 @@ mod audio_monitor;
 #[serde(rename_all = "camelCase")]
 // enum to represent the type of data we are sending through the mpsc channel and finally to the browser extension
 pub enum ExtensionData {
-    SetVolume { tab_id: u32, volume: f64 },
-    SetMute { tab_id: u32, mute: bool},
+    
+    SetVolume { 
+        #[serde(rename = "tabId")]
+        tab_id: u32, 
+        volume: f64 
+    },
+
+    SetMute { 
+        #[serde(rename = "tabId")]
+        tab_id: u32, 
+        #[serde(rename = "isMuted")]
+        mute: bool
+    },
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

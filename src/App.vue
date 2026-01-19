@@ -13,7 +13,7 @@ type SessionData  = {
   uid: string,
   name: string,
   volume: number,
-  is_muted: boolean,
+  isMuted: boolean,
   is_active: boolean,
 }
 // represents a tab's audio from the browser extension
@@ -23,7 +23,7 @@ type AudioTab = {
   title: string;
   isAudible: boolean;
   hasContentAudio: boolean;
-  is_muted: boolean;
+  isMuted: boolean;
   paused: boolean;
   volume: number;
   lastUpdate: number;
@@ -122,7 +122,7 @@ function ToggleMute(pid: number, uid: string, isMute: boolean) {
   // we also optimisticaly change the mute state in the ui to before the backend so it feels responsive
   sessionData.value = sessionData.value.map(session => {
     if(session.uid === payload.uid) {
-      return {...session, is_muted: payload.mute}
+      return {...session, isMuted: payload.mute}
     }else {
       return session;
     }
@@ -139,7 +139,7 @@ function CheckVolumeChanged(event: Event<VolumeChangedPayload>) {
   
   sessionData.value = sessionData.value.map(session => {
     if(session.uid === event.payload.uid) {
-      return {...session, volume: event.payload.newVolume ,is_muted: event.payload.isMuted};
+      return {...session, volume: event.payload.newVolume ,isMuted: event.payload.isMuted};
     }else {
       return session;
     }
@@ -170,7 +170,7 @@ function SessionState(event: Event<SessionStatePayload>) {
 
 // listens to backend websocket server for audio tabs from the extension
 function GetExtensionAudioTabs(event: Event<AudioTab[]>) { // the event is an array of AudioTab objects
-  console.log("RECEIVED EVENT: 'audio-session-created'", event);
+  console.log("RECEIVED EVENT: 'audio-tabs-received'", event);
   audioTabsData.value = event.payload; // replace the whole array from event with the array 'audioTabsData' evry time we get updates
 
 } // we could make the backend send just one 'AudioTab' object at a time and populate the array 'audioTabsData' with them but just for demonstration that sending a list/array can also work
@@ -190,10 +190,10 @@ function _ChangeTabVolume(tabId: number, volume: number) {
 
 const ChangeTabVolume = throttle(_ChangeTabVolume, 50, {leading: true, trailing: true});
 
-function ToggleTabMute(tabId: number, is_muted: boolean) {
+function ToggleTabMute(tabId: number, isMuted: boolean) {
   const payload = {
     tabId: tabId,
-    mute: is_muted,
+    mute: isMuted,
   };
   invoke<void>('set_tab_mute', payload);
 }
@@ -299,17 +299,17 @@ onUnmounted(() => {
 
                 <!-- Mute Button -->
                 <button
-                  @click="ToggleMute(session.pid, session.uid, !session.is_muted)"
+                  @click="ToggleMute(session.pid, session.uid, !session.isMuted)"
                   class="
                     w-20 px-4 py-2 text-sm font-semibold text-white rounded-full 
                     transition-all duration-200 ease-in-out
                     focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-900
                   "
-                  :class="session.is_muted 
+                  :class="session.isMuted 
                     ? 'bg-red-600 hover:bg-red-700 focus:ring-red-500' 
                     : 'bg-gray-600 hover:bg-gray-500 focus:ring-blue-500'"
                 >
-                  {{ session.is_muted ? 'Unmute' : 'Mute' }}
+                  {{ session.isMuted ? 'Unmute' : 'Mute' }}
                 </button>
               </div>
             </div>
@@ -363,17 +363,17 @@ onUnmounted(() => {
 
                 <!-- Mute Button for Tabs -->
                 <button
-                  @click="ToggleTabMute(tab.tabId, !tab.is_muted)"
+                  @click="ToggleTabMute(tab.tabId, !tab.isMuted)"
                   class="
                     w-20 px-4 py-2 text-sm font-semibold text-white rounded-full 
                     transition-all duration-200 ease-in-out
                     focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-900
                   "
-                  :class="tab.is_muted 
+                  :class="tab.isMuted 
                     ? 'bg-red-600 hover:bg-red-700 focus:ring-red-500' 
                     : 'bg-gray-600 hover:bg-gray-500 focus:ring-blue-500'"
                 >
-                  {{ tab.is_muted ? 'Unmute' : 'Mute' }}
+                  {{ tab.isMuted ? 'Unmute' : 'Mute' }}
                 </button>
               </div>
             </div>

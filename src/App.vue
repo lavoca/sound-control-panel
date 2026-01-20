@@ -19,8 +19,8 @@ type SessionData  = {
 // represents a tab's audio from the browser extension
 type AudioTab = {
   tabId: number;
-  url: string;
-  title: string;
+  tabUrl: string;
+  tabTitle: string;
   isAudible: boolean;
   hasContentAudio: boolean;
   isMuted: boolean;
@@ -341,8 +341,8 @@ onUnmounted(() => {
             >
               <!-- Tab Info (Title and URL) -->
               <div class="flex flex-col w-1/3">
-                <span class="font-semibold text-white text-lg truncate" :title="tab.title">{{ tab.title }}</span>
-                <span class="text-xs text-gray-400 truncate" :title="tab.url">{{ tab.url }}</span>
+                <span class="font-semibold text-white text-lg truncate" :title="tab.tabTitle">{{ tab.tabTitle }}</span>
+                <span class="text-xs text-gray-400 truncate" :title="tab.tabUrl">{{ tab.tabUrl }}</span>
               </div>
 
               <!-- Volume Controls for Tabs -->

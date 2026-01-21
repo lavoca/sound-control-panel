@@ -41,8 +41,8 @@ type SessionStatePayload = {
   is_active: boolean,
 }
 
-
-
+// map to hold all the starting slider volumes for every tab
+const startVolumes = new Map<number, number>();
 // this will hold the session data that will be converted from rust type to vue type in order to use it in the template in a vue/typescript freindly way
 const sessionData: Ref<SessionData[]> = ref([]); // sessionData is a reactive variable so to annotate it we need Ref<T>, T is the type we want.
 // holds audio tabs from the extension to use in the ui
@@ -190,10 +190,17 @@ function _ChangeTabVolume(tabId: number, volume: number) {
 
 const ChangeTabVolume = throttle(_ChangeTabVolume, 50, {leading: true, trailing: true});
 
+// captures the value when the slider first gets pressed this value will serve as a returning point when we unmute from volume = 0
+function captureStartVolume(tabID:number, initialVolume: number) {
+  startVolumes.set(tabID, initialVolume); // push the volume and the tabID associated with it as the key
+}
+
 function ToggleTabMute(tabId: number, isMuted: boolean) {
+  let startVolume = startVolumes.get(tabId);
   const payload = {
     tabId: tabId,
     mute: isMuted,
+    initialVolume: startVolume,
   };
   invoke<void>('set_tab_mute', payload);
 }
@@ -354,6 +361,7 @@ onUnmounted(() => {
                   max="1"
                   step="0.01"
                   :value="tab.volume"
+                  @mousedown="captureStartVolume(tab.tabId, tab.volume)"
                   @input="ChangeTabVolume(tab.tabId, ($event.target as HTMLInputElement).valueAsNumber)"
                   class="volume-slider w-48"
                 />

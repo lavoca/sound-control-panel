@@ -25,7 +25,9 @@ pub enum ExtensionData {
         #[serde(rename = "tabId")]
         tab_id: u32, 
         #[serde(rename = "isMuted")]
-        mute: bool
+        mute: bool,
+        #[serde(rename = "initialVolume")]
+        initial_volume: f64
     },
 }
 

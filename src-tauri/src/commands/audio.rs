@@ -460,9 +460,9 @@ pub async fn set_tab_volume (tab_id: u32, volume: f64, command_sender: State<'_,
   
 }
 #[command]
-pub async fn set_tab_mute(tab_id: u32, mute: bool, command_sender: State<'_, Sender<ExtensionData>>) -> Result<(), String> {
+pub async fn set_tab_mute(tab_id: u32, mute: bool, initial_volume: f64, command_sender: State<'_, Sender<ExtensionData>>) -> Result<(), String> {
     
-    let mute_command = ExtensionData::SetMute { tab_id, mute };
+    let mute_command = ExtensionData::SetMute { tab_id, mute, initial_volume };
 
     command_sender.send(mute_command).await.map_err(|e| e.to_string())?;
     Ok(())

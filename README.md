@@ -2,11 +2,18 @@
 
 A powerful, real-time audio mixer for Windows that provides granular control over both system applications and individual browser tabs. Built with a high-performance Rust backend, a modern Vue 3 frontend using Tauri, and a dedicated browser extension.
 
-:warning: For the app to control per tab audio in the browser you will need to install the audio control extension https://github.com/lavoca/audio-control-extension/releases/tag/v1.0.0 
+> [!WARNING]
+> For per-tab audio control, the companion [Browser Extension](https://github.com/lavoca/audio-control-extension/releases/latest) must also be installed. 
 
 ![Application Screenshot](public/screenshots/app_recording.gif)
 
 ---
+
+## Installation
+
+1.  Go to the **[Latest Release](https://github.com/lavoca/sound-control-panel/releases/latest)** page.
+2.  Download and run the `.msi` installer for the desktop application.
+3.  Download and install the `audio-control-extension.zip` from the same release page by following the instructions in the [extension's README](https://github.com/lavoca/audio-control-extension/releases/latest).
 
 ### Core Features
 
@@ -21,7 +28,7 @@ A powerful, real-time audio mixer for Windows that provides granular control ove
 
 This project is a complete, end-to-end system demonstrating bi-directional, real-time communication between a native desktop application, a browser extension, and the operating system itself.
 
-![Application Screenshot](public/screenshots/diagram.svg)
+![Application Architecture Diagram](public/screenshots/diagram.svg)
 
 *   **Tauri Backend (Rust):** A multi-threaded Rust application serves as the core.
     *   An **Audio Monitor** thread interfaces directly with Windows Core Audio (COM) APIs to listen for system-level audio events.
@@ -37,9 +44,11 @@ This project is a complete, end-to-end system demonstrating bi-directional, real
     
 ### Tech Stack
 
-*   **Backend:** Rust | Tauri | Tokio | `windows-rs` for Windows Core Audio (COM) APIs
-*   **Frontend:** Vue 3 | TypeScript
-*   **Styling:** Tailwind CSS
+*   **Desktop App Backend:** Rust, Tauri, Tokio
+*   **OS Interop:** `windows-rs` for Windows Core Audio (COM) APIs
+*   **Concurrency:** `std::thread`, `Arc`, `AtomicBool`, `tokio::sync::{mpsc, broadcast}`
+*   **Frontend:** Vue 3, TypeScript, Tailwind CSS
+*   **Browser Extension:** TypeScript, WebExtensions API
 *   **Communication Protocol:** WebSockets
 
 ### Prerequisites
@@ -66,8 +75,10 @@ This project is a complete, end-to-end system demonstrating bi-directional, real
     pnpm tauri dev
     ```
 
-4.  **Load the unpacked extension:**
-    *   The extension's repo is in https://github.com/lavoca/audio-control-extension
+4.  **Clone and run the browser extension:**
+    *   In a separate terminal, clone the [audio-control-extension](https://github.com/lavoca/audio-control-extension) repository.
+    *   Follow the instructions in its README to run it in development mode (e.g., `pnpm install` then `pnpm dev`).
+    *   Load the unpacked extension from its output directory (e.g., `.output/chrome-mv3`) into your browser.
 
     
 ---

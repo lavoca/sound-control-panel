@@ -5,7 +5,7 @@ A powerful, real-time audio mixer for Windows that provides granular control ove
 > [!WARNING]
 > For per-tab audio control, the companion [Browser Extension](https://github.com/lavoca/audio-control-extension/releases/latest) must also be installed. 
 
-![Application Screenshot](public/screenshots/app_recording.gif)
+![Application Screenshot](public/screenshots/app_record.gif)
 
 ---
 
